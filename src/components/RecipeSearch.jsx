@@ -1,26 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import RecipeCard from './RecipeCard';
+import { debounce } from 'lodash';
 
 const RecipeSearch = () => {
   const APP_ID = import.meta.env.VITE_APP_ID;
   const APP_KEY = import.meta.env.VITE_APP_KEY;
+
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+  const [searchInput, setSearchInput] = useState('');
+  const [cache] = useState(new Map()); // Caching responses
+
   const location = useLocation();
   const navigate = useNavigate();
 
   const query = new URLSearchParams(location.search).get('query');
-  const [searchInput, setSearchInput] = useState(query || '');
 
   useEffect(() => {
     if (query) {
-      getRecipes();
+      debouncedGetRecipes(query);
     }
-    
+
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
       if (currentScrollY > lastScrollY && currentScrollY > 100) {
@@ -30,26 +34,45 @@ const RecipeSearch = () => {
       }
       setLastScrollY(currentScrollY);
     };
-    
+
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, [query, lastScrollY]);
 
-  const getRecipes = async () => {
+  const fetchRecipes = async (query) => {
     const url = `https://api.edamam.com/api/recipes/v2?type=public&q=${query}&app_id=${APP_ID}&app_key=${APP_KEY}`;
-    
+
+    if (cache.has(query)) {
+      setRecipes(cache.get(query)); // Use cached data
+      return;
+    }
+
     try {
+      setLoading(true);
+      setError(null);
+
       const response = await fetch(url);
+      if (response.status === 429) {
+        setError('Rate limit exceeded. Please try again later.');
+        return;
+      }
       if (!response.ok) {
         throw new Error(`Error ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
-      setRecipes(data.hits); // Update recipes with API response
-    } catch (error) {
-      console.error('Failed to fetch recipes:', error.message);
+      cache.set(query, data.hits); // Cache the response
+      setRecipes(data.hits);
+    } catch (err) {
+      console.error('Failed to fetch recipes:', err.message);
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
+
+  // Debounced version of fetchRecipes
+  const debouncedGetRecipes = useCallback(debounce(fetchRecipes, 600), []);
 
   const handleNewSearch = (e) => {
     e.preventDefault();
@@ -134,7 +157,7 @@ const RecipeSearch = () => {
             <p className="text-gray-600 mb-6">{error}</p>
             <button 
               className="px-6 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-full hover:from-red-600 hover:to-red-700 transition-all duration-300 shadow-lg hover:shadow-red-400/20"
-              onClick={getRecipes}
+              onClick={fetchRecipes}
             >
               Try Again
             </button>
@@ -167,10 +190,10 @@ const RecipeSearch = () => {
                     key={`${recipe.recipe.label}-${index}`}
                   >
                     <RecipeCard
-                      title={recipe.recipe.label}
-                      calories={recipe.recipe.calories}
+                      title={recipe.recipe.label ?? "Unknown"}
+                      calories={recipe.recipe.calories ?? 0}
                       image={recipe.recipe.image}
-                      ingredients={recipe.recipe.ingredients}
+                      ingredients={recipe.recipe.ingredients ?? []}
                     />
                   </div>
                 ))}
